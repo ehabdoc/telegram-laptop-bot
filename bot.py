@@ -12,8 +12,11 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 PORT = int(os.environ.get("PORT", 8080))
 
+logger.info(f"Boot config: TELEGRAM_TOKEN={'set' if TELEGRAM_TOKEN else 'MISSING'}, "
+            f"GROQ_API_KEY={'set' if GROQ_API_KEY else 'MISSING'}, PORT={PORT}")
+
 if not TELEGRAM_TOKEN or not GROQ_API_KEY:
-    raise ValueError("TELEGRAM_TOKEN and GROQ_API_KEY environment variables must be set")
+    logger.error("FATAL: TELEGRAM_TOKEN and GROQ_API_KEY environment variables must be set")
 
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
