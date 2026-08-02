@@ -12,6 +12,13 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 PORT = int(os.environ.get("PORT", 8080))
 
+# Logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 logger.info(f"Boot config: TELEGRAM_TOKEN={'set' if TELEGRAM_TOKEN else 'MISSING'}, "
             f"GROQ_API_KEY={'set' if GROQ_API_KEY else 'MISSING'}, PORT={PORT}")
 
@@ -20,13 +27,6 @@ if not TELEGRAM_TOKEN or not GROQ_API_KEY:
 
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
-
-# Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
 # Fake Health Check Server - يحافظ على نشاط الـ Worker على Render
 class HealthHandler(BaseHTTPRequestHandler):
