@@ -164,6 +164,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         bot_reply = completion.choices[0].message.content
         add_to_history(user_id, "assistant", bot_reply)
+        logger.info(f"رد على {user_id}: {bot_reply[:150]}")
         await update.message.reply_text(bot_reply)
     except Exception as e:
         logger.error(f"Error handling text: {e}")
@@ -321,6 +322,7 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
             return
         # نضع التحديث في الطابور (من خيط HTTP) بأمان، ويرجع الـ 200 فوراً
         self.server.loop.call_soon_threadsafe(self.server.update_queue.put_nowait, update)
+        logger.info(f"Webhook استقبل تحديث #{getattr(update, 'update_id', '?')}")
         self._send(200, b"OK")
 
     def log_message(self, format, *args):
