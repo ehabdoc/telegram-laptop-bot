@@ -382,12 +382,7 @@ def main():
     health_thread = Thread(target=run_health_server, daemon=True)
     health_thread.start()
 
-    # لو كان فيه webhook مضبوط من قبل، شيله عشان الـ polling يشتغل
-    try:
-        asyncio.run(app.bot.delete_webhook())
-    except Exception:
-        pass
-
+    # ملاحظة: PTB يحذف أي webhook مضبوط تلقائياً عند بدء polling
     print("✅ البوت شغال ومستعد لاستقبال الرسائل في تليجرام!")
     app.run_polling()
 
