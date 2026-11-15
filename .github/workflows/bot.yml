@@ -1,0 +1,35 @@
+name: telegram-bot
+
+# يعمل 24/7 على جدولة دورية: كل 50 دقيقة يبدأ تشغيل جديد
+# ويلغي السابق (cancel-in-progress) حتى لا يتضارب البوت على polling.
+on:
+  schedule:
+    - cron: '0,50 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-laptop-bot
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run bot (long polling)
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python bot.py
