@@ -1,7 +1,18 @@
 import os
+import sys
+import json
+import asyncio
 import logging
 from threading import Thread
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+
+# Windows: الطرفية قد تستخدم cp1252 فيتوقف البرنامج عند طباعة الإيموجي
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
@@ -11,6 +22,12 @@ import fitz
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 PORT = int(os.environ.get("PORT", 8080))
+
+# وضع Webhook: يُستخدم عند النشر على منصة مجانية (Render) بدل polling
+# لأن المنصات المجانية تنام (sleep) إذا ما وصلها طلب.
+WEBHOOK_BASE = os.environ.get("WEBHOOK_BASE", "").rstrip("/")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "hook")
 
 # Logging
 logging.basicConfig(
@@ -140,7 +157,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.6,
             max_tokens=800
@@ -179,7 +196,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         messages.extend(get_history(user_id))
 
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.6,
             max_tokens=800
@@ -226,7 +243,7 @@ async def handle_document_message(update: Update, context: ContextTypes.DEFAULT_
         messages.extend(get_history(user_id))
 
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.6,
             max_tokens=900
@@ -253,7 +270,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.6,
             max_tokens=600
@@ -267,12 +284,86 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Error handling photo: {e}")
         await update.message.reply_text("استلمت الصورة يا حبيبنا! أقدر أساعدك كيف بخصوصها؟")
 
+# ──────────────────────── وضع Webhook (للنشر المجاني على Render) ────────────────────────
+class WebhookRequestHandler(BaseHTTPRequestHandler):
+    """يستقبل تحديثات تليجرام + نقطة صحة على نفس المنفذ."""
+
+    def _send(self, code: int, body: bytes = b"Bot is alive"):
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        # نقطة الصحة: Render والـ pinger يضربون هذا المسار لإيقاظ الخدمة
+        self._send(200)
+
+    def do_POST(self):
+        path = self.path.split("?")[0].rstrip("/")
+        if path != f"/{WEBHOOK_PATH}":
+            self._send(404, b"Not found")
+            return
+        if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+            self._send(403, b"Forbidden")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            self._send(400, b"Bad request")
+            return
+        try:
+            update = Update.de_json(data, self.server.bot)
+        except Exception as e:
+            logger.error(f"Cannot parse incoming update: {e}")
+            self._send(400, b"Bad request")
+            return
+        # نضع التحديث في الطابور (من خيط HTTP) بأمان، ويرجع الـ 200 فوراً
+        self.server.loop.call_soon_threadsafe(self.server.update_queue.put_nowait, update)
+        self._send(200, b"OK")
+
+    def log_message(self, format, *args):
+        pass  # صامت: نتجنب ضجيج كل طلب
+
+
+async def run_webhook(app):
+    """يشغّل البوت في وضع webhook: منفذ واحد يخدم التحديثات + نقطة الصحة."""
+    await app.initialize()
+    await app.start()
+
+    queue = app.updater.update_queue if getattr(app, "updater", None) else app.update_queue
+    webhook_url = f"{WEBHOOK_BASE}/{WEBHOOK_PATH}"
+    await app.bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET or None,
+        allowed_updates=Update.ALL_TYPES,
+    )
+    logger.info(f"Webhook مضبوط على: {webhook_url}")
+
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), WebhookRequestHandler)
+    server.bot = app.bot
+    server.update_queue = queue
+    server.loop = asyncio.get_running_loop()
+    Thread(target=server.serve_forever, daemon=True).start()
+    logger.info(f"خادم الـ webhook يعمل على 0.0.0.0:{PORT}")
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        try:
+            await app.bot.delete_webhook()
+        except Exception:
+            pass
+        await app.stop()
+        await app.shutdown()
+
+
 def main():
     print("🚀 جاري تشغيل بوت متجر التك للابتوبات...")
-
-    # تشغيل Health Server في Thread منفصل عشان Render ما يقفل الـ Worker
-    health_thread = Thread(target=run_health_server, daemon=True)
-    health_thread.start()
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -281,6 +372,21 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+
+    if WEBHOOK_BASE:
+        print(f"✅ وضع Webhook — العنوان: {WEBHOOK_BASE}/{WEBHOOK_PATH}")
+        asyncio.run(run_webhook(app))
+        return
+
+    # تشغيل Health Server في Thread منفصل عشان Render ما يقفل الـ Worker
+    health_thread = Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+
+    # لو كان فيه webhook مضبوط من قبل، شيله عشان الـ polling يشتغل
+    try:
+        asyncio.run(app.bot.delete_webhook())
+    except Exception:
+        pass
 
     print("✅ البوت شغال ومستعد لاستقبال الرسائل في تليجرام!")
     app.run_polling()
