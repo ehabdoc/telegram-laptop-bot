@@ -1,10 +1,8 @@
 name: telegram-bot
 
-# يعمل 24/7 على جدولة دورية: كل 50 دقيقة يبدأ تشغيل جديد
-# ويلغي السابق (cancel-in-progress) حتى لا يتضارب البوت على polling.
+# البوت الأساسي يعمل الآن على Render (وضع webhook) — انظر keepalive.yml.
+# هذه النسخة الاحتياطية تعمل يدوياً فقط: تشغيل polling و webhook معاً يسبب تعارض 409.
 on:
-  schedule:
-    - cron: '0,50 * * * *'
   workflow_dispatch:
 
 concurrency:
